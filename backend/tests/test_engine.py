@@ -191,6 +191,7 @@ def test_prompt_extraction_separates_facts_from_assumptions():
     assert all(item.origin != "user" or item.key in known for item in extraction.assumptions)
     overridden = extract_requirements(prompt, {"floors": 10, "category": "construction"})
     assert overridden.values["floors"] == 10
+    assert any(item.key == "floors" and item.origin == "user" and item.value == 10 for item in overridden.known)
     sparse = extract_requirements("Help me plan something unusual.", today=date(2026, 1, 5))
     assert sparse.project_type == "custom"
     assert sparse.missing

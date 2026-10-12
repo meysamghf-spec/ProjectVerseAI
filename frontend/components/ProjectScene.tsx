@@ -5,7 +5,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 
-import { buildScene, type SceneGroup, type SceneModel } from "@/lib/scene";
+import { buildScene, elementState, phaseSummary, type SceneGroup, type SceneModel } from "@/lib/scene";
 import type { ProjectDetail } from "@/lib/types";
 
 class SceneErrorBoundary extends Component<{ children: ReactNode }, { message: string | null }> {
@@ -30,16 +30,19 @@ class SceneErrorBoundary extends Component<{ children: ReactNode }, { message: s
 function GroupMesh({
   group,
   selected,
-  progress,
+  day,
+  duration,
   onSelect,
 }: {
   group: SceneGroup;
   selected: boolean;
-  progress: number;
+  day: number;
+  duration: number;
   onSelect: (id: string) => void;
 }) {
   const ref = useRef<THREE.InstancedMesh>(null);
-  const built = group.appearAt <= progress + 1e-6;
+  const state = elementState(group, day, duration);
+  const built = state === "active" || state === "completed" || state === "reference";
   useLayoutEffect(() => {
     const mesh = ref.current;
     if (!mesh) {
@@ -57,7 +60,7 @@ function GroupMesh({
   if (group.instances.length === 0) {
     return null;
   }
-  const opacity = built ? (group.kind === "envelope" ? 0.22 : 0.94) : 0.08;
+  const opacity = !built ? 0.08 : state === "active" ? (group.kind === "envelope" ? 0.34 : 0.96) : group.kind === "envelope" ? 0.18 : 0.72;
   return (
     <instancedMesh
       ref={ref}
@@ -93,14 +96,16 @@ function CameraReset({ signal, focus }: { signal: number; focus: [number, number
 
 function SceneStage({
   model,
-  progress,
+  day,
+  duration,
   hidden,
   selected,
   onSelect,
   resetSignal,
 }: {
   model: SceneModel;
-  progress: number;
+  day: number;
+  duration: number;
   hidden: Set<string>;
   selected: string | null;
   onSelect: (id: string | null) => void;
@@ -129,7 +134,8 @@ function SceneStage({
             key={`${group.id}-${group.instances.length}`}
             group={group}
             selected={selected === group.id}
-            progress={progress}
+            day={day}
+            duration={duration}
             onSelect={onSelect}
           />
         ))}
@@ -149,8 +155,9 @@ export default function ProjectScene({ project }: { project: ProjectDetail }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [resetSignal, setResetSignal] = useState(0);
-  const progress = duration > 0 ? Math.min(day / duration, 1) : 1;
   const selectedGroup = model.groups.find((group) => group.id === selected) || null;
+  const phases = phaseSummary(model.groups, day, duration);
+  const selectedState = selectedGroup ? elementState(selectedGroup, day, duration) : null;
 
   useEffect(() => {
     setDay(duration);
@@ -203,7 +210,8 @@ export default function ProjectScene({ project }: { project: ProjectDetail }) {
           <SceneErrorBoundary>
             <SceneStage
               model={model}
-              progress={progress}
+              day={day}
+              duration={duration}
               hidden={hidden}
               selected={selected}
               onSelect={setSelected}
@@ -214,6 +222,13 @@ export default function ProjectScene({ project }: { project: ProjectDetail }) {
       </div>
       <div className="space-y-3 border-t border-line p-4">
         <p className="text-sm text-muted">{model.disclaimer}</p>
+        <div className="flex flex-wrap gap-2" aria-label="Phase status">
+          {phases.map((phase) => (
+            <span key={phase.phase} className={`badge ${phase.state === "active" ? "calculated" : phase.state === "completed" ? "user" : "assumption"}`}>
+              {phase.phase} · {phase.state}
+            </span>
+          ))}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn" type="button" onClick={() => setPlaying((value) => !value)} disabled={!duration}>
             {playing ? "Pause" : "Play"}
@@ -272,6 +287,7 @@ export default function ProjectScene({ project }: { project: ProjectDetail }) {
                 <p className="text-muted">
                   {selectedGroup.kind} · {selectedGroup.phase}
                   {selectedGroup.taskId ? ` · task ${selectedGroup.taskId}` : ""}
+                  {selectedState ? ` · ${selectedState}` : ""}
                 </p>
                 <dl className="mt-2 space-y-1">
                   {Object.entries(selectedGroup.metadata).map(([key, value]) => (

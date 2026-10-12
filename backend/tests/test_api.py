@@ -3,6 +3,7 @@
 import io
 
 from app.engine.distributions import percentile
+from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 
@@ -89,6 +90,25 @@ def test_owner_isolation(client):
     assert other.json()["total"] == 0
     hidden = client.get(f"/api/v1/projects/{created['id']}", headers={"X-Owner-Id": "someone-else"})
     assert hidden.status_code == 404
+
+
+def test_production_rejects_development_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'prod-open.db'}")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AUTH_MODE", "development")
+    monkeypatch.setenv("API_KEY", "")
+    from app.db import get_engine, reset_database_state
+    from app.models import Base
+
+    reset_database_state()
+    Base.metadata.create_all(bind=get_engine())
+    from app.main import app
+
+    with TestClient(app) as production:
+        assert production.get("/api/v1/health").status_code == 200
+        blocked = production.get("/api/v1/projects", headers={"X-Owner-Id": "dev-user"})
+        assert blocked.status_code == 401
+        assert "API_KEY" in blocked.json()["error"]["message"]
 
 
 def test_production_auth_requires_api_key(prod_client):
