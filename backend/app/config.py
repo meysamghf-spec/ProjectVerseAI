@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.app_env.lower() == "production"
 
+    def production_configuration_error(self) -> str | None:
+        """Return a blocker when production would expose project data or a wildcard origin."""
+
+        if not self.is_production:
+            return None
+        if self.auth_mode != "api_key" or not self.api_key:
+            return "Production requires AUTH_MODE=api_key and a non-empty API_KEY."
+        if "*" in self.cors_origin_list:
+            return "Production CORS_ORIGINS cannot include '*'."
+        return None
+
 
 @lru_cache
 def get_settings() -> Settings:

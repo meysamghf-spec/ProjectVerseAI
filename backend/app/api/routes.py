@@ -68,6 +68,9 @@ def api_error(status: int, code: str, message: str, details=None) -> NoReturn:
 
 
 def get_owner(request: Request, settings: Settings = Depends(get_settings)) -> str:
+    configuration_error = settings.production_configuration_error()
+    if configuration_error:
+        api_error(401, "unauthorized", configuration_error)
     if settings.auth_mode == "development":
         owner = (request.headers.get("x-owner-id") or settings.dev_owner_id).strip()
         if not owner:

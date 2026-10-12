@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildScene } from "./scene";
+import { buildScene, elementState, phaseSummary } from "./scene";
 import type { SceneParams, Task } from "./types";
 
 function building(floors: number, floorHeight = 3.2): SceneParams {
@@ -57,6 +57,26 @@ describe("buildScene", () => {
     expect(scene.metaphor).toBe("system-modules");
     expect(scene.groups.some((group) => group.kind === "slab")).toBe(false);
     expect(scene.disclaimer.toLowerCase()).toContain("conceptual");
+  });
+
+  it("ties construction geometry to scheduled task windows", () => {
+    const scheduled = [
+      { code: "CON-SUPER", name: "Superstructure", phase: "superstructure", is_summary: false, start_offset: 100, finish_offset: 300 },
+      { code: "CON-ENV", name: "Envelope", phase: "envelope", is_summary: false, start_offset: 300, finish_offset: 420 },
+    ] as Task[];
+    const scene = buildScene("construction", building(4), scheduled);
+    const first = scene.groups.find((group) => group.id === "floor-1");
+    const last = scene.groups.find((group) => group.id === "floor-4");
+    const envelope = scene.groups.find((group) => group.id === "envelope-1");
+    expect(first?.startDay).toBe(100);
+    expect(first?.finishDay).toBe(150);
+    expect(last?.startDay).toBe(250);
+    expect(envelope?.startDay).toBe(300);
+    expect(elementState(first!, 0, 420)).toBe("pending");
+    expect(elementState(first!, 110, 420)).toBe("active");
+    expect(elementState(first!, 160, 420)).toBe("completed");
+    expect(phaseSummary(scene.groups, 110, 420).find((item) => item.phase === "superstructure")?.state).toBe("active");
+    expect(phaseSummary(scene.groups, 0, 420).find((item) => item.phase === "envelope")?.state).toBe("pending");
   });
 
   it("reports an honest unavailable state when building dimensions are missing", () => {

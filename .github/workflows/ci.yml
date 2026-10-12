@@ -26,7 +26,21 @@ jobs:
       - name: Test
         run: pytest -q
       - name: Validate configuration loads without secrets
-        run: python -c "from app.config import Settings; settings = Settings(); assert settings.auth_mode"
+        run: python -c "from app.config import Settings; settings = Settings(); assert settings.auth_mode; assert settings.production_configuration_error() is None"
+      - name: Live API smoke test
+        env:
+          APP_ENV: development
+          AUTH_MODE: development
+          DATABASE_URL: sqlite:////tmp/projectverse-smoke.db
+        run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8011 &
+          pid=$!
+          trap 'kill $pid' EXIT
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            curl -sf http://127.0.0.1:8011/api/v1/health && break
+            sleep 1
+          done
+          python ../scripts/smoke_api.py http://127.0.0.1:8011
 
   frontend:
     runs-on: ubuntu-latest

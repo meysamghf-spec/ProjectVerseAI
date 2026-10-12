@@ -13,8 +13,51 @@ export interface SceneGroup {
   color: string;
   taskId?: string;
   appearAt: number;
+  startDay?: number;
+  finishDay?: number;
   instances: SceneInstance[];
   metadata: Record<string, string | number>;
+}
+
+export type ElementState = "reference" | "pending" | "active" | "completed";
+
+export function elementState(group: SceneGroup, day: number, duration: number): ElementState {
+  if (group.kind === "reference" || group.phase === "reference") {
+    return "reference";
+  }
+  if (group.startDay != null && group.finishDay != null) {
+    if (day + 1e-6 < group.startDay) {
+      return "pending";
+    }
+    if (day + 1e-6 >= group.finishDay) {
+      return "completed";
+    }
+    return "active";
+  }
+  const progress = duration > 0 ? Math.min(day / duration, 1) : 1;
+  return progress + 1e-6 < group.appearAt ? "pending" : "completed";
+}
+
+export function phaseSummary(groups: SceneGroup[], day: number, duration: number): Array<{ phase: string; state: Exclude<ElementState, "reference"> }> {
+  const buckets = new Map<string, ElementState[]>();
+  for (const group of groups) {
+    const state = elementState(group, day, duration);
+    if (state === "reference") {
+      continue;
+    }
+    const current = buckets.get(group.phase) || [];
+    current.push(state);
+    buckets.set(group.phase, current);
+  }
+  return [...buckets.entries()].map(([phase, states]) => {
+    if (states.every((state) => state === "completed")) {
+      return { phase, state: "completed" as const };
+    }
+    if (states.every((state) => state === "pending")) {
+      return { phase, state: "pending" as const };
+    }
+    return { phase, state: "active" as const };
+  });
 }
 
 export interface SceneModel {
@@ -52,6 +95,36 @@ function taskCode(tasks: Task[], phase: string): string | undefined {
   return tasks.find((task) => !task.is_summary && task.phase === phase)?.code;
 }
 
+function phaseWindow(tasks: Task[], phase: string): { start: number; finish: number } | null {
+  const matches = tasks.filter(
+    (task) =>
+      !task.is_summary &&
+      !task.is_milestone &&
+      task.phase === phase &&
+      task.start_offset != null &&
+      task.finish_offset != null &&
+      task.finish_offset > task.start_offset,
+  );
+  if (matches.length === 0) {
+    return null;
+  }
+  return {
+    start: Math.min(...matches.map((task) => task.start_offset as number)),
+    finish: Math.max(...matches.map((task) => task.finish_offset as number)),
+  };
+}
+
+function sliceWindow(window: { start: number; finish: number } | null, startFraction: number, endFraction: number): { startDay?: number; finishDay?: number } {
+  if (!window) {
+    return {};
+  }
+  const span = window.finish - window.start;
+  return {
+    startDay: window.start + span * startFraction,
+    finishDay: window.start + span * endFraction,
+  };
+}
+
 function gridCoords(span: number, spacing: number): number[] {
   const count = Math.max(2, Math.min(8, Math.floor(span / spacing) + 1));
   const step = span / (count - 1);
@@ -80,6 +153,9 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
   const spacing = scene.column_spacing_m ?? 8;
   const groups: SceneGroup[] = [];
   const rules = scene.rules?.join(" ") || "Procedural massing tied to project phases.";
+  const subWindow = phaseWindow(tasks, "substructure");
+  const superWindow = phaseWindow(tasks, "superstructure");
+  const envelopeWindow = phaseWindow(tasks, "envelope");
 
   groups.push({
     id: "reference-ground",
@@ -100,6 +176,7 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
     color: colorFor("foundation"),
     taskId: taskCode(tasks, "substructure"),
     appearAt: 0.08,
+    ...sliceWindow(subWindow, 0, 0.34),
     instances: [
       {
         position: [0, -(basements * basementHeight) - 0.45, 0],
@@ -119,6 +196,7 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
       color: colorFor("basement"),
       taskId: taskCode(tasks, "substructure"),
       appearAt: 0.12 + ((level + 1) / Math.max(basements, 1)) * 0.12,
+      ...sliceWindow(subWindow, 0.34 + (0.66 * level) / Math.max(basements, 1), 0.34 + (0.66 * (level + 1)) / Math.max(basements, 1)),
       instances: [{ position: [0, y, 0], size: [width, 0.28, length] }],
       metadata: { level: level + 1, height_m: basementHeight, phase: "substructure" },
     });
@@ -137,6 +215,7 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
       color: colorFor("superstructure"),
       taskId: taskCode(tasks, "superstructure"),
       appearAt,
+      ...sliceWindow(superWindow, floor / floors, (floor + 1) / floors),
       instances: [{ position: [0, slabY, 0], size: [width, 0.28, length] }],
       metadata: { level: floor + 1, elevation_m: slabY, phase: "superstructure" },
     });
@@ -161,6 +240,7 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
       color: "#b8884a",
       taskId: taskCode(tasks, "superstructure"),
       appearAt,
+      ...sliceWindow(superWindow, floor / floors, (floor + 1) / floors),
       instances: columns,
       metadata: { level: floor + 1, column_count: columns.length, spacing_m: spacing },
     });
@@ -172,6 +252,7 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
       color: colorFor("envelope"),
       taskId: taskCode(tasks, "envelope"),
       appearAt: Math.min(0.96, appearAt + 0.18),
+      ...sliceWindow(envelopeWindow, floor / floors, (floor + 1) / floors),
       instances: [{ position: [0, slabY + floorHeight / 2, 0], size: [width + 0.4, floorHeight * 0.92, length + 0.4] }],
       metadata: { level: floor + 1, phase: "envelope", rule: "Envelope volume is a shell placeholder, not a facade design." },
     });
@@ -185,6 +266,7 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
     color: "#5c6b7a",
     taskId: taskCode(tasks, "superstructure"),
     appearAt: 0.34,
+    ...sliceWindow(superWindow, 0, 1),
     instances: [{ position: [0, (floors * floorHeight) / 2, 0], size: [coreWidth, floors * floorHeight, coreLength] }],
     metadata: { core_width_m: coreWidth, core_length_m: coreLength, rule: "Core size is a visualization assumption." },
   });
@@ -197,6 +279,7 @@ function construction(scene: SceneParams, tasks: Task[]): SceneModel {
     color: "#d7dde5",
     taskId: taskCode(tasks, "superstructure"),
     appearAt: 0.3,
+    ...sliceWindow(superWindow, 0, 1),
     instances: [
       { position: [width / 2 + 2, (floors * floorHeight) / 2, -length / 2 - 2], size: [0.5, floors * floorHeight + 6, 0.5] },
       { position: [width / 4, floors * floorHeight + 3, -length / 2 - 2], size: [width * 0.7, 0.35, 0.35] },
@@ -254,6 +337,9 @@ function diagram(category: string, scene: SceneParams, tasks: Task[]): SceneMode
       color: colorFor(task.phase || "build"),
       taskId: task.code,
       appearAt: source.length <= 1 ? 0 : index / (source.length - 1),
+      ...(task.start_offset != null && task.finish_offset != null
+        ? { startDay: task.start_offset, finishDay: Math.max(task.finish_offset, task.start_offset) }
+        : {}),
       instances: [{ position: [x, y + 1, z], size: [2.4, 1.4, 2.4] }],
       metadata: {
         task: task.code,

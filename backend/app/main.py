@@ -24,6 +24,9 @@ logger = logging.getLogger("projectverse")
 async def lifespan(_app: FastAPI):
     settings = get_settings()
     engine = get_engine()
+    configuration_error = settings.production_configuration_error()
+    if configuration_error:
+        logger.error("%s Project routes will reject requests until this is fixed.", configuration_error)
     if not settings.is_production:
         Base.metadata.create_all(bind=engine)
     from app.db import get_sessionmaker
@@ -57,9 +60,12 @@ app = FastAPI(
 app.include_router(router)
 
 settings = get_settings()
+_cors_origins = [origin for origin in settings.cors_origin_list if origin != "*"]
+if not settings.is_production and not _cors_origins:
+    _cors_origins = ["http://localhost:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list or ["http://localhost:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

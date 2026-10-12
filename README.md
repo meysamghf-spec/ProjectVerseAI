@@ -51,6 +51,8 @@ docker compose up --build
 
 Compose starts PostgreSQL 16, runs `alembic upgrade head` in the API container, and serves the UI on port 3000. The published database credentials in `docker-compose.yml` are local defaults only.
 
+Public hosting steps, the production Compose overlay, and the live smoke test are in [DEPLOYMENT.md](DEPLOYMENT.md). This repository does not deploy itself to a hosted URL.
+
 ## Environment variables
 
 Copy `.env.example` when you want overrides. Empty values are valid.
@@ -73,7 +75,7 @@ Copy `.env.example` when you want overrides. Empty values are valid.
 
 Development mode is not an account system. The UI stores `projectverse.owner` in `localStorage` (default `dev-user`) and sends `X-Owner-Id`. That header is a convenience and can be spoofed. Projects are filtered by owner, and another owner receives 404.
 
-Production mode (`APP_ENV=production`, `AUTH_MODE=api_key`) requires `API_KEY` and ignores `X-Owner-Id`. Requests without the key are rejected. This is a shared service key, not per-user authentication.
+Production mode (`APP_ENV=production`, `AUTH_MODE=api_key`) requires `API_KEY` and ignores `X-Owner-Id`. Requests without the key are rejected. This is a shared service key, not per-user authentication. If production is started with development authentication or an empty key, project routes return 401 instead of accepting the owner header. `CORS_ORIGINS` in production must list explicit site origins. A `*` origin is rejected.
 
 ## Demonstration project
 

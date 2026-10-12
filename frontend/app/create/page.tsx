@@ -22,25 +22,70 @@ export default function CreatePage() {
   const [monteCarlo, setMonteCarlo] = useState(true);
   const [preview, setPreview] = useState<null | {
     known: FieldRecord[];
+    inferred: FieldRecord[];
     assumptions: FieldRecord[];
     missing: string[];
     confidence: number;
     warnings: string[];
   }>(null);
+  const [edits, setEdits] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
+  const EDITABLE = [
+    ["name", "Name"],
+    ["floors", "Floors"],
+    ["basements", "Basements"],
+    ["gfa_sqm", "Gross floor area m²"],
+    ["duration_months", "Duration months"],
+    ["budget_amount", "Budget"],
+    ["team_size", "Team size"],
+    ["location", "Location"],
+    ["start_date", "Start date"],
+  ] as const;
+
+  function extractedValue(key: string): string {
+    if (!preview) {
+      return "";
+    }
+    const record = [...preview.known, ...preview.inferred, ...preview.assumptions].find((item) => item.key === key);
+    if (!record || record.value == null || typeof record.value === "object") {
+      return "";
+    }
+    return String(record.value);
+  }
+
   function structured() {
+    const edited: Record<string, string | number | undefined> = {};
+    for (const [key] of EDITABLE) {
+      if (!(key in edits)) {
+        continue;
+      }
+      const raw = edits[key].trim();
+      if (!raw) {
+        continue;
+      }
+      const numeric = ["floors", "basements", "gfa_sqm", "duration_months", "budget_amount", "team_size"].includes(key);
+      const value = numeric ? Number(raw) : raw;
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        continue;
+      }
+      edited[key] = value;
+    }
     return {
       prompt,
-      name: name || undefined,
+      name: (edited.name as string | undefined) || name || undefined,
       category: category || undefined,
-      start_date: startDate || undefined,
+      start_date: (edited.start_date as string | undefined) || startDate || undefined,
       deadline: deadline || undefined,
-      budget_amount: budget ? Number(budget) : undefined,
+      budget_amount: (edited.budget_amount as number | undefined) ?? (budget ? Number(budget) : undefined),
       currency,
-      location: location || undefined,
-      team_size: teamSize ? Number(teamSize) : undefined,
+      location: (edited.location as string | undefined) || location || undefined,
+      team_size: (edited.team_size as number | undefined) ?? (teamSize ? Number(teamSize) : undefined),
+      floors: edited.floors as number | undefined,
+      basements: edited.basements as number | undefined,
+      gfa_sqm: edited.gfa_sqm as number | undefined,
+      duration_months: edited.duration_months as number | undefined,
     };
   }
 
@@ -107,11 +152,12 @@ export default function CreatePage() {
             onClick={async () => {
               setError(null);
               try {
-                const result = await api<{ known: FieldRecord[]; assumptions: FieldRecord[]; missing: string[]; confidence: number; warnings: string[] }>("/api/v1/extract", {
+                const result = await api<{ known: FieldRecord[]; inferred: FieldRecord[]; assumptions: FieldRecord[]; missing: string[]; confidence: number; warnings: string[] }>("/api/v1/extract", {
                   method: "POST",
                   body: JSON.stringify(structured()),
                 });
                 setPreview(result);
+                setEdits({});
               } catch (err) {
                 setError(err instanceof Error ? err.message : "Extraction failed.");
               }
@@ -124,7 +170,7 @@ export default function CreatePage() {
       <aside className="panel space-y-4 p-5">
         <h2 className="font-display text-2xl">What will be assumed</h2>
         <p className="text-sm text-muted">
-          Missing facts do not block the plan. They are filled with editable assumptions and kept separate from anything you typed.
+          Missing facts do not block the plan. They are filled with editable assumptions and kept separate from anything you typed. A value stays an assumption until you change it here.
         </p>
         {preview ? (
           <div className="space-y-3 text-sm">
@@ -133,7 +179,24 @@ export default function CreatePage() {
               <p key={warning} className="text-amber">{warning}</p>
             ))}
             <RecordList title="User-provided" origin="user" records={preview.known} />
+            <RecordList title="Inferred" origin="inferred" records={preview.inferred} />
             <RecordList title="Assumptions" origin="assumption" records={preview.assumptions} />
+            <div className="space-y-2">
+              <h3 className="font-medium">Edit extracted values</h3>
+              <p className="text-muted">Edited values are sent as your inputs. Unedited assumptions remain assumptions.</p>
+              <div className="grid grid-cols-2 gap-2">
+                {EDITABLE.map(([key, label]) => (
+                  <label key={key} className="text-xs">
+                    {label}
+                    <input
+                      className="field mt-1"
+                      value={key in edits ? edits[key] : extractedValue(key)}
+                      onChange={(event) => setEdits((current) => ({ ...current, [key]: event.target.value }))}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
             <div>
               <h3 className="mb-1 font-medium">Missing</h3>
               <p className="text-muted">{preview.missing.join(", ") || "None listed."}</p>
