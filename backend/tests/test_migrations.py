@@ -30,5 +30,7 @@ def test_alembic_upgrade_creates_tables(tmp_path, monkeypatch):
         "simulation_results",
         "reports",
         "project_changes",
+        "users",
+        "auth_sessions",
     }
     assert expected <= tables

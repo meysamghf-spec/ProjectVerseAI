@@ -143,6 +143,7 @@ def project_detail(db: Session, project: Project, include_samples: bool = False)
         "scene": project.scene or {},
         "confidence": spec.confidence if spec else None,
         "deliverables": (project.values or {}).get("deliverables") or [],
+        "plan_warnings": (project.values or {}).get("plan_warnings") or [],
         "plan_generated_at": _iso(project.plan_generated_at),
         "specification": None
         if spec is None

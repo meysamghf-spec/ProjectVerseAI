@@ -85,6 +85,7 @@ def generate_plan(values: dict, extraction_assumptions: list[dict] | None = None
     }
     builder = builders.get(project_type, _custom)
     draft = builder(values)
+    _apply_currency(draft, values)
     for item in extraction_assumptions or []:
         draft.assumptions.append(item)
     draft.assumptions.append(
@@ -97,6 +98,60 @@ def generate_plan(values: dict, extraction_assumptions: list[dict] | None = None
         }
     )
     return draft
+
+
+_LOCAL_RATE_KEYS = ("labor_per_sqm", "materials_per_sqm", "equipment_per_sqm", "services_per_sqm")
+
+
+def _apply_currency(draft: PlanDraft, values: dict) -> None:
+    """Sample rates are USD. Convert them for other currencies only with a user-supplied rate."""
+
+    currency = str(values.get("currency") or "USD").upper()
+    if currency == "USD":
+        return
+    fx = values.get("usd_exchange_rate")
+    own_rates = any(values.get(key) is not None for key in _LOCAL_RATE_KEYS)
+    if own_rates:
+        draft.warnings.append(
+            f"Unit rates you entered are used as {currency}. Bundled sample allowances that you did not "
+            "replace are still USD figures."
+        )
+        return
+    if not fx:
+        draft.warnings.append(
+            f"Costs use the bundled USD sample rates and are NOT converted to {currency}. "
+            f"Set usd_exchange_rate ({currency} per 1 USD) or enter local unit rates before reading totals."
+        )
+        draft.assumptions.append(
+            {
+                "key": "cost_currency_basis",
+                "value": "USD sample rates, unconverted",
+                "rationale": f"No usd_exchange_rate was given for {currency}.",
+                "source": "assumption",
+                "confidence": 0.1,
+            }
+        )
+        return
+    factor = float(fx)
+    for line in draft.costs:
+        line.amount = round(line.amount * factor, 2)
+        line.unit_cost = round(line.unit_cost * factor, 2)
+        for attr in ("amount_min", "amount_mode", "amount_max"):
+            value = getattr(line, attr)
+            if value is not None:
+                setattr(line, attr, round(value * factor, 2))
+    for risk in draft.risks:
+        if risk.get("impact_cost"):
+            risk["impact_cost"] = round(float(risk["impact_cost"]) * factor, 2)
+    draft.assumptions.append(
+        {
+            "key": "usd_exchange_rate",
+            "value": factor,
+            "rationale": f"USD sample rates converted at {factor:g} {currency} per USD (user-supplied).",
+            "source": "user",
+            "confidence": 0.6,
+        }
+    )
 
 
 def _construction(values: dict) -> PlanDraft:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.auth import CSRF_HEADER, SESSION_COOKIE, user_for_token
 from app.config import Settings, get_settings
 from app.db import check_database, get_db
 from app.engine import ENGINE_VERSION
@@ -22,6 +24,7 @@ from app.models import (
     SimulationRun,
     Task,
     TaskDependency,
+    User,
 )
 from app.schemas import (
     CostCreate,
@@ -54,6 +57,7 @@ from app.services.planning import (
 from app.services.reports import collect_document, render_report, store_report
 from app.services.serialize import latest_run, project_detail, project_summary, run_payload, scenario_payload
 from app.services.snapshot import evaluate_snapshot
+from app.text import normalize_for_search
 
 router = APIRouter(prefix="/api/v1")
 
@@ -67,10 +71,50 @@ def api_error(status: int, code: str, message: str, details=None) -> NoReturn:
     raise HTTPException(status_code=status, detail=body)
 
 
-def get_owner(request: Request, settings: Settings = Depends(get_settings)) -> str:
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def session_token(request: Request) -> tuple[str, bool]:
+    """Return (token, from_cookie). A bearer header wins over the cookie."""
+
+    authorization = request.headers.get("authorization") or ""
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip(), False
+    return request.cookies.get(SESSION_COOKIE, ""), True
+
+
+def get_current_user(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> User:
+    if settings.auth_mode != "accounts":
+        api_error(400, "accounts_disabled", "User accounts are not enabled on this server (AUTH_MODE).")
+    token, from_cookie = session_token(request)
+    user = user_for_token(db, token)
+    if user is None:
+        api_error(401, "unauthorized", "Sign in to continue.")
+    if from_cookie and request.method in _UNSAFE_METHODS and not request.headers.get(CSRF_HEADER):
+        api_error(403, "csrf", "Missing X-Requested-With header.")
+    return user
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != "admin":
+        api_error(403, "forbidden", "Administrator role required.")
+    return user
+
+
+def get_owner(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> str:
     configuration_error = settings.production_configuration_error()
     if configuration_error:
         api_error(401, "unauthorized", configuration_error)
+    if settings.auth_mode == "accounts":
+        return get_current_user(request, settings, db).id
     if settings.auth_mode == "development":
         owner = (request.headers.get("x-owner-id") or settings.dev_owner_id).strip()
         if not owner:
@@ -80,7 +124,7 @@ def get_owner(request: Request, settings: Settings = Depends(get_settings)) -> s
     authorization = request.headers.get("authorization") or ""
     if authorization.lower().startswith("bearer "):
         token = token or authorization[7:].strip()
-    if not settings.api_key or token != settings.api_key:
+    if not settings.api_key or not token or not hmac.compare_digest(token, settings.api_key):
         api_error(401, "unauthorized", "A valid API key is required.")
     return settings.api_owner_id
 
@@ -123,8 +167,7 @@ def meta(settings: Settings = Depends(get_settings)) -> dict:
         "llm_configured": bool(settings.llm_api_key and settings.llm_base_url),
         "sample_rates": SAMPLE_RATES,
         "limitations": [
-            "Development authentication is a shared local owner, not an account system.",
-            "Production mode requires PROJECTVERSE_API_KEY via the API_KEY environment variable.",
+            "Production requires AUTH_MODE=accounts. Accounts are created by an administrator; there is no public sign-up or email password reset.",
             "Sample rates are bundled assumptions dated 2026-01-01, not live market prices.",
             "The 3D view is conceptual massing or a diagram, not a design model.",
             "Monte Carlo percentiles describe this model's seeded samples only.",
@@ -206,8 +249,22 @@ def list_projects(
     db: Session = Depends(get_db),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    q: str | None = Query(default=None, max_length=200),
 ) -> dict:
     query = db.query(Project).filter(Project.owner_id == owner)
+    needle = normalize_for_search(q or "")
+    if needle:
+        # Normalized in Python so Persian letter variants (ي/ی, ك/ک), Persian digits, and ZWNJ
+        # match the same way on SQLite and PostgreSQL. Bounded to one owner's projects.
+        candidates = query.order_by(Project.updated_at.desc()).limit(5000).all()
+        matched = [
+            row
+            for row in candidates
+            if needle in normalize_for_search(" ".join(filter(None, [row.name, row.location, row.summary, row.original_prompt])))
+        ]
+        start = (page - 1) * page_size
+        rows = matched[start : start + page_size]
+        return {"items": [project_summary(row) for row in rows], "page": page, "page_size": page_size, "total": len(matched)}
     total = query.count()
     rows = query.order_by(Project.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return {"items": [project_summary(row) for row in rows], "page": page, "page_size": page_size, "total": total}

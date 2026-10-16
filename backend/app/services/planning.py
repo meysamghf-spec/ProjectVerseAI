@@ -224,6 +224,9 @@ def update_project(db: Session, project: Project, fields: dict) -> Project:
         elif key == "budget_amount":
             project.budget_amount = float(value)
             values[key] = float(value)
+        elif key == "usd_exchange_rate":
+            values[key] = float(value)
+            project.schedule_stale = True
         elif key == "team_size":
             project.team_size = int(value)
             values[key] = int(value)
@@ -442,6 +445,7 @@ def generate_project_plan(db: Session, project: Project, run_monte_carlo: bool =
     project.cost_model = _jsonable(draft.cost_model)
     values = dict(project.values or {})
     values["deliverables"] = draft.deliverables
+    values["plan_warnings"] = list(draft.warnings)
     project.values = values
     project.plan_generated_at = _now()
     project.schedule_stale = False

@@ -1,0 +1,31 @@
+# Site block for the server's ONE shared Caddy (not started by this repo). Same conventions as
+# ElectionSimulationAI: external Docker network "caddy", one subdomain per platform.
+# Paste into the shared Caddyfile, replace the hostname, then reload:
+#   docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+
+projects.example.ir {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		-Server
+	}
+	# API (same origin, so the session cookie is first-party).
+	handle /api/* {
+		reverse_proxy projectverse-api:8000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+	# Everything else, including /health, is the Next.js site.
+	handle {
+		reverse_proxy projectverse-web:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+			health_uri /health
+			health_interval 30s
+		}
+	}
+}

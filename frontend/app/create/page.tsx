@@ -3,20 +3,33 @@
 import { useState } from "react";
 
 import { OriginBadge } from "@/components/Badges";
+import { DateField } from "@/components/DateField";
 import { api } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { FieldRecord, ProjectDetail } from "@/lib/types";
+
+function toLatin(value: string): string {
+  return value.replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))).replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d))).replace(/٬/g, ",").replace(/٫/g, ".");
+}
 
 const EXAMPLE =
   "Plan a 20-story residential building with three basement parking levels, 25,000 square meters of gross floor area, a $15 million budget, and a 30-month construction schedule. Generate a 3D conceptual model, construction phases, project schedule, cost breakdown, resource plan, risk register, and alternative scenarios.";
 
+const EXAMPLE_FA =
+  "برنامه‌ریزی ساخت یک ساختمان مسکونی ۱۲ طبقه با ۲ طبقه زیرزمین، ۹۶۰۰ متر مربع زیربنا، بودجه ۱۵۰ میلیارد تومان و مدت ۲۴ ماه در اراک.";
+
 export default function CreatePage() {
-  const [prompt, setPrompt] = useState(EXAMPLE);
+  const { t, locale, irrUnit } = useI18n();
+  const [prompt, setPrompt] = useState(locale === "fa" ? EXAMPLE_FA : EXAMPLE);
+  const [fx, setFx] = useState("");
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [startDate, setStartDate] = useState("");
   const [deadline, setDeadline] = useState("");
   const [budget, setBudget] = useState("");
-  const [currency, setCurrency] = useState("USD");
+  const [currency, setCurrency] = useState(locale === "fa" ? "IRR" : "USD");
+  // Persian UI with toman display: budgets are typed in toman and stored in rial (x10).
+  const budgetInToman = locale === "fa" && irrUnit === "toman" && currency.toUpperCase() === "IRR";
   const [location, setLocation] = useState("");
   const [teamSize, setTeamSize] = useState("");
   const [monteCarlo, setMonteCarlo] = useState(true);
@@ -78,8 +91,11 @@ export default function CreatePage() {
       category: category || undefined,
       start_date: (edited.start_date as string | undefined) || startDate || undefined,
       deadline: deadline || undefined,
-      budget_amount: (edited.budget_amount as number | undefined) ?? (budget ? Number(budget) : undefined),
-      currency,
+      budget_amount:
+        (edited.budget_amount as number | undefined) ??
+        (budget ? Number(toLatin(budget).replace(/,/g, "")) * (budgetInToman ? 10 : 1) : undefined),
+      currency: currency.toUpperCase(),
+      usd_exchange_rate: fx ? Number(toLatin(fx).replace(/,/g, "")) : undefined,
       location: (edited.location as string | undefined) || location || undefined,
       team_size: (edited.team_size as number | undefined) ?? (teamSize ? Number(teamSize) : undefined),
       floors: edited.floors as number | undefined,
@@ -116,7 +132,7 @@ export default function CreatePage() {
         </div>
         <label className="block text-sm">
           Project prompt
-          <textarea className="field mt-2 min-h-48" value={prompt} onChange={(event) => setPrompt(event.target.value)} required />
+          <textarea className="field mt-2 min-h-48" dir="auto" value={prompt} onChange={(event) => setPrompt(event.target.value)} required />
         </label>
         <details className="rounded-xl border border-line p-3">
           <summary className="cursor-pointer">Optional structured inputs</summary>
@@ -131,10 +147,28 @@ export default function CreatePage() {
                 ))}
               </select>
             </label>
-            <label className="text-sm">Start date<input className="field mt-1" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
-            <label className="text-sm">Deadline<input className="field mt-1" type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label>
-            <label className="text-sm">Budget<input className="field mt-1" inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} /></label>
-            <label className="text-sm">Currency<input className="field mt-1" value={currency} onChange={(event) => setCurrency(event.target.value)} /></label>
+            <DateField label={t("create.start")} value={startDate} onChange={setStartDate} />
+            <DateField label={t("create.deadline")} value={deadline} onChange={setDeadline} />
+            <label className="text-sm">
+              {t("create.budget")}
+              {budgetInToman ? " (تومان)" : ""}
+              <input className="field mt-1" dir="ltr" inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} />
+            </label>
+            <label className="text-sm">
+              {t("create.currency")}
+              <select className="field mt-1" value={currency} onChange={(event) => setCurrency(event.target.value)}>
+                {["USD", "EUR", "GBP", "AED", "TRY", "IRR"].map((code) => (
+                  <option key={code} value={code}>{code === "IRR" ? (locale === "fa" ? "ریال/تومان (IRR)" : "Iranian rial (IRR)") : code}</option>
+                ))}
+              </select>
+            </label>
+            {currency !== "USD" ? (
+              <label className="text-sm sm:col-span-2">
+                {t("create.fx")}
+                <input className="field mt-1" dir="ltr" inputMode="decimal" value={fx} onChange={(event) => setFx(event.target.value)} />
+                <span className="mt-1 block text-xs text-muted">{t("create.fxHelp")}</span>
+              </label>
+            ) : null}
             <label className="text-sm">Location<input className="field mt-1" value={location} onChange={(event) => setLocation(event.target.value)} /></label>
             <label className="text-sm">Team size<input className="field mt-1" inputMode="numeric" value={teamSize} onChange={(event) => setTeamSize(event.target.value)} /></label>
           </div>

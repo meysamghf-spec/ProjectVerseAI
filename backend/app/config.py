@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+WEAK_PASSWORDS = {"projectverse", "postgres", "password", "change-me", "change-me-local-only", "secret"}
 
 
 class Settings(BaseSettings):
@@ -23,8 +26,20 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     max_body_bytes: int = 1_000_000
     engine_version: str = "1.0.0"
+    # Accounts mode
+    initial_admin_email: str = ""
+    initial_admin_password: str = ""
+    legacy_owner_id: str = ""
+    session_hours: int = 12
+    cookie_secure: bool | None = None
+    login_max_failures: int = 10
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @field_validator("cookie_secure", mode="before")
+    @classmethod
+    def _blank_is_auto(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -34,15 +49,25 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.app_env.lower() == "production"
 
+    @property
+    def secure_cookies(self) -> bool:
+        return self.is_production if self.cookie_secure is None else self.cookie_secure
+
     def production_configuration_error(self) -> str | None:
         """Return a blocker when production would expose project data or a wildcard origin."""
 
         if not self.is_production:
             return None
-        if self.auth_mode != "api_key" or not self.api_key:
-            return "Production requires AUTH_MODE=api_key and a non-empty API_KEY."
+        if self.auth_mode != "accounts":
+            return "Production requires AUTH_MODE=accounts (per-user sign-in)."
         if "*" in self.cors_origin_list:
             return "Production CORS_ORIGINS cannot include '*'."
+        if self.database_url.startswith("postgresql"):
+            from urllib.parse import unquote, urlsplit
+
+            password = unquote(urlsplit(self.database_url).password or "")
+            if len(password) < 16 or password.lower() in WEAK_PASSWORDS:
+                return "The database password must be at least 16 characters and not a placeholder."
         return None
 
 

@@ -1,38 +1,98 @@
+# Production stack for a VPS that already runs ONE shared Caddy reverse proxy (see DEPLOY.md).
+#   docker network create caddy        # once per server, shared by every app
+#   docker compose --profile production up -d --build
+# Publishes NO host ports. The shared Caddy reaches projectverse-web:3000 and projectverse-api:8000
+# over the external "caddy" network. PostgreSQL is only on the internal "data" network.
+# Shared PostgreSQL instead of the bundled db:
+#   docker compose -f docker-compose.yml -f docker-compose.shared-db.yml --profile production up -d --build
+# Local development: docker compose -f docker-compose.dev.yml up --build
+
+name: projectverse
+
 services:
   db:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    profiles: ["production"]
+    restart: unless-stopped
     environment:
       POSTGRES_USER: projectverse
-      POSTGRES_PASSWORD: projectverse
+      # Not ":?" so the shared-db overlay renders without it. The API refuses a password under 16 characters.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: projectverse
-    ports:
-      - "5432:5432"
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U projectverse -d projectverse"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
-  backend:
-    build: ./backend
+  api:
+    build:
+      context: ./backend
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+    profiles: ["production"]
+    restart: unless-stopped
     environment:
-      APP_ENV: development
-      AUTH_MODE: development
-      DEV_OWNER_ID: dev-user
-      DATABASE_URL: postgresql+psycopg://projectverse:projectverse@db:5432/projectverse
-      CORS_ORIGINS: http://localhost:3000
-      LLM_PROVIDER: deterministic
-    ports:
-      - "8000:8000"
+      APP_ENV: production
+      AUTH_MODE: accounts
+      DATABASE_URL: postgresql+psycopg://projectverse:${POSTGRES_PASSWORD:-}@db:5432/projectverse
+      CORS_ORIGINS: https://${SITE_ADDRESS:?Set SITE_ADDRESS to the public hostname, for example projects.example.ir}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      LEGACY_OWNER_ID: ${LEGACY_OWNER_ID:-}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deterministic}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      data: {}
+      internal: {}
+      proxy:
+        aliases:
+          - projectverse-api
 
-  frontend:
-    build: ./frontend
+  web:
+    build:
+      context: ./frontend
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_DEFAULT_LOCALE: ${DEFAULT_LOCALE:-en}
+    profiles: ["production"]
+    restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
-    ports:
-      - "3000:3000"
+      API_INTERNAL_URL: http://api:8000
     depends_on:
-      - backend
+      api:
+        condition: service_healthy
+    networks:
+      internal: {}
+      proxy:
+        aliases:
+          - projectverse-web
+
+networks:
+  # Database traffic only. No route to the internet.
+  data:
+    internal: true
+  # web -> api for the combined health check.
+  internal:
+    internal: true
+  # Created once per server and shared with the single Caddy container.
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-caddy}
+
+volumes:
+  pgdata:

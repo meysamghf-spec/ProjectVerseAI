@@ -1,0 +1,26 @@
+# Optional overlay: use the server's shared PostgreSQL container instead of the bundled db.
+#   docker compose -f docker-compose.yml -f docker-compose.shared-db.yml --profile production up -d --build
+# The shared Postgres container must be attached to the external network SHARED_DB_NETWORK
+# (default "postgres"), publish no host port, and have a UTF-8 database plus a dedicated role:
+#   CREATE ROLE projectverse LOGIN PASSWORD '...';
+#   CREATE DATABASE projectverse OWNER projectverse ENCODING 'UTF8' TEMPLATE template0;
+# DATABASE_URL=postgresql+psycopg://projectverse:LONG_PASSWORD@postgres:5432/projectverse
+
+services:
+  db:
+    profiles: !override ["bundled-db"]
+  api:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the shared PostgreSQL URL}
+    depends_on: !reset {}
+    networks: !override
+      internal: {}
+      shareddb: {}
+      proxy:
+        aliases:
+          - projectverse-api
+
+networks:
+  shareddb:
+    external: true
+    name: ${SHARED_DB_NETWORK:-postgres}

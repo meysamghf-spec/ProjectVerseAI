@@ -6,7 +6,7 @@ import { OriginBadge } from "@/components/Badges";
 import { GanttChart } from "@/components/Gantt";
 import { useProjectContext } from "@/components/ProjectProvider";
 import { api } from "@/lib/api";
-import { days } from "@/lib/format";
+import { dateLabel, days } from "@/lib/format";
 
 export default function SchedulePage() {
   const { project, reload } = useProjectContext();
@@ -67,8 +67,8 @@ export default function SchedulePage() {
                 <td className="py-2">{task.code}</td>
                 <td>{task.name}{task.is_critical ? " · Critical" : ""}</td>
                 <td>{task.duration}</td>
-                <td>{task.start_date || task.start_offset}</td>
-                <td>{task.finish_date || task.finish_offset}</td>
+                <td>{task.start_date ? dateLabel(task.start_date) : task.start_offset}</td>
+                <td>{task.finish_date ? dateLabel(task.finish_date) : task.finish_offset}</td>
                 <td>{task.total_float}</td>
                 <td>{project.dependencies.filter((item) => item.successor_code === task.code).map((item) => item.predecessor_code).join(", ")}</td>
               </tr>

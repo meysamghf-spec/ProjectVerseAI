@@ -11,7 +11,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.auth_routes import router as auth_router
 from app.api.routes import router
+from app.auth import bootstrap_admin
 from app.config import get_settings
 from app.db import get_engine
 from app.models import Base, SimulationRun
@@ -42,6 +44,7 @@ async def lifespan(_app: FastAPI):
             run.status = "failed"
             run.error_message = "Interrupted by process restart."
         session.commit()
+        bootstrap_admin(session, settings)
     finally:
         session.close()
     yield
@@ -58,6 +61,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(router)
+app.include_router(auth_router)
 
 settings = get_settings()
 _cors_origins = [origin for origin in settings.cors_origin_list if origin != "*"]
@@ -66,7 +70,7 @@ if not settings.is_production and not _cors_origins:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -131,6 +135,19 @@ async def unhandled_exception_handler(_request: Request, exc: Exception):
     return JSONResponse(status_code=500, content=body)
 
 
+@app.get("/health")
+def root_health() -> JSONResponse:
+    """Unauthenticated liveness plus database check for proxies and uptime monitors."""
+
+    from app.db import check_database
+
+    healthy = check_database()
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={"status": "ok" if healthy else "degraded", "database": "ok" if healthy else "unavailable"},
+    )
+
+
 @app.get("/")
 def root() -> dict:
-    return {"name": "ProjectVerse AI", "docs": "/docs", "health": "/api/v1/health"}
+    return {"name": "ProjectVerse AI", "docs": "/docs", "health": "/health"}
