@@ -1,0 +1,48 @@
+# Laptop-only stack. Every port binds to 127.0.0.1.
+#   docker compose -f docker-compose.dev.yml up --build
+# Development mode: no sign-in, a shared local owner id. Never expose this stack to the internet.
+
+name: projectverse-dev
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_USER: projectverse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+      POSTGRES_DB: projectverse
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U projectverse -d projectverse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      APP_ENV: development
+      AUTH_MODE: ${AUTH_MODE:-development}
+      DEV_OWNER_ID: dev-user
+      DATABASE_URL: postgresql+psycopg://projectverse:${POSTGRES_PASSWORD:-change-me-local-only}@db:5432/projectverse
+      CORS_ORIGINS: http://localhost:3000
+      LLM_PROVIDER: deterministic
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      COOKIE_SECURE: "false"
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api

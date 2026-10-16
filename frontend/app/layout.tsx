@@ -1,22 +1,20 @@
 import type { Metadata } from "next";
-import { Figtree, Fraunces } from "next/font/google";
 
 import { AppShell } from "@/components/AppShell";
+import { DEFAULT_LOCALE, directionOf } from "@/lib/locale";
 
 import "./globals.css";
-
-const display = Fraunces({ subsets: ["latin"], variable: "--font-display" });
-const body = Figtree({ subsets: ["latin"], variable: "--font-body" });
 
 export const metadata: Metadata = {
   title: "ProjectVerse AI",
   description: "Turn a project description into a plan, schedule, budget, and conceptual 3D simulation.",
 };
 
+// No Google Fonts: the build must work on servers that cannot reach fonts.googleapis.com.
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className={`${display.variable} ${body.variable}`}>
+    <html lang={DEFAULT_LOCALE} dir={directionOf(DEFAULT_LOCALE)}>
+      <body>
         <AppShell>{children}</AppShell>
       </body>
     </html>

@@ -18,7 +18,10 @@ backend/                 FastAPI application, simulation engine, Alembic
 frontend/                Next.js workspace and React Three Fiber scenes
   lib/scene.ts           Procedural scene builder used by the canvas and tests
   app/projects/[id]/     Schedule, budget, resources, risks, scenarios, reports
-docker-compose.yml       PostgreSQL, API, and web UI
+docker-compose.yml       Production stack (behind a shared Caddy, no host ports)
+docker-compose.dev.yml   Local stack on 127.0.0.1
+docker-compose.shared-db.yml  Optional overlay for a shared PostgreSQL
+deploy/Caddyfile.shared.example  Site block for the shared Caddy
 .github/workflows/ci.yml Backend and frontend checks
 ```
 
@@ -41,41 +44,45 @@ npm ci
 npm run dev
 ```
 
-Open http://localhost:3000. The dashboard can create the residential tower demonstration without an API key. Non-production startup also calls `create_all`, so a fresh SQLite file works even before the first Alembic run. Use Alembic whenever the schema must match migration history, including Docker and production.
+Open http://localhost:3000. The dashboard can create the residential tower demonstration without signing in (development mode). Non-production startup also calls `create_all`, so a fresh SQLite file works even before the first Alembic run. Use Alembic whenever the schema must match migration history, including Docker and production.
 
 ## Docker Compose
 
+Local, development mode, ports bound to 127.0.0.1 only:
+
 ```bash
-docker compose up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
 
-Compose starts PostgreSQL 16, runs `alembic upgrade head` in the API container, and serves the UI on port 3000. The published database credentials in `docker-compose.yml` are local defaults only.
-
-Public hosting steps, the production Compose overlay, and the live smoke test are in [DEPLOYMENT.md](DEPLOYMENT.md). This repository does not deploy itself to a hosted URL.
+Production (`docker-compose.yml`, profile `production`) publishes no host ports. It joins the server's shared Caddy network and requires secrets from `.env`. See [DEPLOY.md](DEPLOY.md) for the full Iranian VPS guide (shared Caddy, optional shared PostgreSQL, Iranian Docker/PyPI/npm mirrors, first admin, health checks, backups).
 
 ## Environment variables
 
-Copy `.env.example` when you want overrides. Empty values are valid.
+Copy `.env.example`; it documents every variable. The main ones:
 
 | Variable | Role |
 | --- | --- |
-| `APP_ENV` | `development` or `production`. Production hides internal error text and skips automatic `create_all`. |
-| `AUTH_MODE` | `development` or `api_key`. |
-| `DEV_OWNER_ID` | Owner id used when the `X-Owner-Id` header is absent in development. |
-| `API_KEY` | Required when `AUTH_MODE=api_key`. Send `X-API-Key` or `Authorization: Bearer`. |
-| `API_OWNER_ID` | Single owner id used for API-key mode. |
-| `DATABASE_URL` | Default `sqlite:///./projectverse.db`. Compose uses PostgreSQL. |
-| `CORS_ORIGINS` | Comma-separated browser origins. |
-| `LLM_PROVIDER` | `deterministic` (default) or `openai_compatible`. |
-| `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | Optional provider settings. Read from the environment, never hard-coded. |
-| `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` | Bounds for the optional provider. |
-| `NEXT_PUBLIC_API_URL` | Browser-facing API origin. Default `http://localhost:8000`. |
+| `APP_ENV` | `development` or `production`. Production hides internal error text, skips `create_all`, and enforces the checks below. |
+| `AUTH_MODE` | `accounts` (required in production), `development` (shared owner header), or `api_key` (legacy, development only). |
+| `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` | First administrator, created only while the users table is empty. |
+| `SESSION_HOURS`, `COOKIE_SECURE` | Session lifetime (default 12 h). Cookies are `Secure` in production unless overridden. |
+| `DATABASE_URL` / `POSTGRES_PASSWORD` | Database. Production rejects passwords under 16 characters. |
+| `CORS_ORIGINS` | Explicit browser origins. Production compose sets `https://$SITE_ADDRESS`. |
+| `SITE_ADDRESS`, `PROXY_NETWORK` | Public hostname and the shared Caddy network (default `caddy`). |
+| `DEFAULT_LOCALE` / `NEXT_PUBLIC_DEFAULT_LOCALE` | Interface language for first-time visitors: `en` (default) or `fa`. |
+| `PYTHON_IMAGE`, `NODE_IMAGE`, `POSTGRES_IMAGE`, `PIP_INDEX_URL`, `NPM_REGISTRY` | Optional mirrors for image builds. |
+| `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | Optional OpenAI-compatible extractor. Read from the environment, never hard-coded. |
+| `NEXT_PUBLIC_API_URL` | Browser-facing API origin. Empty means same origin (production behind Caddy). |
 
 ## Authentication
 
-Development mode is not an account system. The UI stores `projectverse.owner` in `localStorage` (default `dev-user`) and sends `X-Owner-Id`. That header is a convenience and can be spoofed. Projects are filtered by owner, and another owner receives 404.
+Production uses **user accounts** (`AUTH_MODE=accounts`). There is no public sign-up: the first admin comes from `INITIAL_ADMIN_*`, and admins create further users on the **Users** page or with `python -m app.cli create-user`. Roles are `admin` and `user`. Passwords are scrypt hashes; sessions are random tokens stored hashed in the database and sent as an `HttpOnly`, `SameSite=Lax` cookie (or `Authorization: Bearer` for scripts). Cookie-authenticated writes and sign-in require an `X-Requested-With` header. Failed sign-ins are throttled per email and client address. Every user sees only their own projects.
 
-Production mode (`APP_ENV=production`, `AUTH_MODE=api_key`) requires `API_KEY` and ignores `X-Owner-Id`. Requests without the key are rejected. This is a shared service key, not per-user authentication. If production is started with development authentication or an empty key, project routes return 401 instead of accepting the owner header. `CORS_ORIGINS` in production must list explicit site origins. A `*` origin is rejected.
+Development mode is not an account system. The UI sends `X-Owner-Id` (default `dev-user`), which can be spoofed; production ignores it. Production also rejects `api_key` and `development` modes, wildcard CORS, and short database passwords.
+
+## Language and formatting
+
+The UI defaults to English (LTR, Gregorian dates, USD by default) and has an English/فارسی toggle in the header. Persian switches to RTL, Jalali dates (date inputs accept ۱۴۰۵/۰۷/۲۴), Persian digits, and toman or rial for IRR (Settings). The choice persists in `localStorage` and a cookie. The API stores text as UTF-8; project search normalizes Arabic/Persian yeh and kaf, Persian/Arabic digits, and ZWNJ. The deterministic extractor understands Persian descriptions (طبقه، زیرزمین، متر مربع، میلیارد تومان، ماه، نفر). Some detailed project screens are still English-only.
 
 ## Demonstration project
 
@@ -113,10 +120,10 @@ GitHub Actions (`.github/workflows/ci.yml`) runs those commands. It does not dep
 
 ## Limitations
 
-- Development authentication is a shared owner header, not accounts, sessions, or authorization reviews.
+- No password reset by email, email verification, or two-factor sign-in. The sign-in throttle is in memory.
+- Cost sample rates are in USD; non-USD projects need a USD exchange rate to convert estimates (otherwise a warning is shown).
 - Cost rates are configurable sample assumptions. There is no validated price database.
 - The 3D view is a conceptual massing or diagram driven by project parameters. It is not a BIM model, structural analysis, or architectural drawing.
 - The default calendar counts elapsed calendar days. Weekend and holiday calendars exist in the engine and are off unless a project turns them on.
 - Background simulation uses threads inside the API process. It is not a durable external queue.
-- One API key represents one owner in production mode.
 - Docker images and Compose are provided. This repository does not deploy them to a hosted environment by itself.

@@ -108,16 +108,23 @@ def test_production_rejects_development_auth(tmp_path, monkeypatch):
         assert production.get("/api/v1/health").status_code == 200
         blocked = production.get("/api/v1/projects", headers={"X-Owner-Id": "dev-user"})
         assert blocked.status_code == 401
-        assert "API_KEY" in blocked.json()["error"]["message"]
+        assert "AUTH_MODE=accounts" in blocked.json()["error"]["message"]
 
 
-def test_production_auth_requires_api_key(prod_client):
+def test_production_requires_a_signed_in_user(prod_client):
     blocked = prod_client.get("/api/v1/projects")
     assert blocked.status_code == 401
-    allowed = prod_client.get("/api/v1/projects", headers={"X-API-Key": "test-key"})
-    assert allowed.status_code == 200
+    legacy_key = prod_client.get("/api/v1/projects", headers={"X-API-Key": "test-key"})
+    assert legacy_key.status_code == 401
     spoofed = prod_client.get("/api/v1/projects", headers={"X-Owner-Id": "dev-user"})
     assert spoofed.status_code == 401
+    login = prod_client.post(
+        "/api/v1/auth/login", json={"email": "admin@example.com", "password": "admin-password-123"},
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+    assert login.status_code == 200
+    allowed = prod_client.get("/api/v1/projects")
+    assert allowed.status_code == 200
 
 
 def test_cycle_budget_line_monte_carlo_and_reports(client):

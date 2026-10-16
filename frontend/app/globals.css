@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 :root {
+  --font-display: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+  --font-body: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-fa: Vazirmatn, Vazir, Tahoma, "Segoe UI", "Noto Sans Arabic", sans-serif;
   color-scheme: dark;
   --canvas: #10151c;
   --panel: #182230;
@@ -116,4 +119,28 @@ textarea {
 .badge.simulation {
   color: #f0c7bc;
   border-color: #8a5346;
+}
+
+/* Persian / RTL. Uses a locally installed Vazirmatn when present, then Tahoma. */
+html[dir="rtl"] body,
+html[dir="rtl"] .font-display,
+html[dir="rtl"] button,
+html[dir="rtl"] input,
+html[dir="rtl"] select,
+html[dir="rtl"] textarea {
+  font-family: var(--font-fa);
+}
+html[dir="rtl"] body {
+  line-height: 1.8;
+}
+html[dir="rtl"] .tracking-\[0\.18em\] {
+  letter-spacing: 0;
+}
+html[dir="rtl"] th,
+html[dir="rtl"] td {
+  text-align: right;
+}
+html[dir="rtl"] .pl-5 {
+  padding-left: 0;
+  padding-right: 1.25rem;
 }

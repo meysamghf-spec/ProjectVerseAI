@@ -15,6 +15,7 @@ class ProjectCreate(BaseModel):
     deadline: str | None = None
     budget_amount: float | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, max_length=8)
+    usd_exchange_rate: float | None = Field(default=None, gt=0)
     location: str | None = Field(default=None, max_length=200)
     floors: int | None = Field(default=None, ge=0, le=200)
     basements: int | None = Field(default=None, ge=0, le=40)
@@ -42,6 +43,7 @@ class ProjectUpdate(BaseModel):
     deadline: str | None = None
     budget_amount: float | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, max_length=8)
+    usd_exchange_rate: float | None = Field(default=None, gt=0)
     location: str | None = Field(default=None, max_length=200)
     floors: int | None = Field(default=None, ge=0, le=200)
     basements: int | None = Field(default=None, ge=0, le=40)

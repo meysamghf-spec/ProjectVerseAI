@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.text import normalize_digits, normalize_for_search
+
 WORD_NUMBERS = {
     "one": 1,
     "two": 2,
@@ -25,15 +27,25 @@ WORD_NUMBERS = {
 }
 
 TYPE_KEYWORDS: list[tuple[str, list[str]]] = [
-    ("construction", ["building", "construction", "residential", "tower", "basement", "storey", "story"]),
-    ("software", ["software", "application", "mobile app", "web app", "api", "saas", "codebase"]),
-    ("manufacturing", ["manufacturing", "factory", "production line", "assembly plant", "fabrication"]),
-    ("infrastructure", ["highway", "bridge", "railway", "rail ", "infrastructure", "pipeline", "runway"]),
-    ("urban", ["urban", "district", "neighborhood", "neighbourhood", "masterplan", "master plan", "city block"]),
-    ("logistics", ["logistics", "warehouse", "distribution", "supply chain", "fleet", "last mile"]),
-    ("research", ["research", "r&d", "laboratory", "experiment", "clinical"]),
-    ("event", ["conference", "festival", "wedding", "exhibition", "event planning", "venue"]),
+    ("construction", ["building", "construction", "residential", "tower", "basement", "storey", "story",
+                      "ساختمان", "مسکونی", "برج", "زیرزمین", "اداری", "تجاری", "طبقه"]),
+    ("software", ["software", "application", "mobile app", "web app", "api", "saas", "codebase",
+                  "نرم افزار", "اپلیکیشن", "وب سایت", "سامانه", "اپ موبایل"]),
+    ("manufacturing", ["manufacturing", "factory", "production line", "assembly plant", "fabrication",
+                       "کارخانه", "خط تولید", "مونتاژ"]),
+    ("infrastructure", ["highway", "bridge", "railway", "rail ", "infrastructure", "pipeline", "runway",
+                        "بزرگراه", "آزادراه", "راه آهن", "تونل", "خط لوله", "زیرساخت", "سد ", "پل "]),
+    ("urban", ["urban", "district", "neighborhood", "neighbourhood", "masterplan", "master plan", "city block",
+               "شهری", "محله", "شهرک", "طرح جامع"]),
+    ("logistics", ["logistics", "warehouse", "distribution", "supply chain", "fleet", "last mile",
+                   "لجستیک", "انبار", "توزیع", "زنجیره تامین"]),
+    ("research", ["research", "r&d", "laboratory", "experiment", "clinical", "پژوهش", "تحقیق", "آزمایشگاه"]),
+    ("event", ["conference", "festival", "wedding", "exhibition", "event planning", "venue",
+               "همایش", "جشنواره", "عروسی", "نمایشگاه"]),
 ]
+
+PERSIAN_SCALES = {"هزار": 1e3, "میلیون": 1e6, "میلیارد": 1e9, "همت": 1e12, "تریلیون": 1e12}
+_FA_NUM = r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
 
 
 @dataclass
@@ -76,7 +88,7 @@ def _classify(prompt: str, explicit: str | None) -> tuple[str, str, float]:
     if explicit:
         return explicit.strip().lower().replace(" ", "_").replace("-", "_"), "user", 1.0
     scores: dict[str, int] = {}
-    lowered = prompt.lower()
+    lowered = normalize_for_search(prompt) + " "
     for name, keywords in TYPE_KEYWORDS:
         scores[name] = sum(1 for keyword in keywords if keyword in lowered)
     best = max(scores.values(), default=0)
@@ -86,7 +98,29 @@ def _classify(prompt: str, explicit: str | None) -> tuple[str, str, float]:
     return winners[0], "inferred", min(0.9, 0.45 + 0.15 * best)
 
 
+def _find_persian_money(prompt: str) -> tuple[float, str] | None:
+    """'۱۵ میلیارد تومان' -> (150_000_000_000, 'IRR'); toman is stored as rial (x10). '2 میلیون دلار' -> USD."""
+
+    match = re.search(_FA_NUM + r"\s*(هزار|میلیون|میلیارد|همت|تریلیون)?\s*(تومان|تومن|ریال|دلار|یورو)", prompt)
+    if not match:
+        match = re.search(_FA_NUM + r"\s*(همت)()", prompt)
+    if not match:
+        return None
+    amount = _number(match.group(1)) * PERSIAN_SCALES.get(match.group(2) or "", 1)
+    unit = match.group(3)
+    if match.group(2) == "همت":
+        unit = "تومان"  # همت = هزار میلیارد تومان
+    if unit in {"تومان", "تومن"}:
+        return amount * 10, "IRR"
+    if unit == "ریال":
+        return amount, "IRR"
+    return amount, "USD" if unit == "دلار" else "EUR"
+
+
 def _find_money(prompt: str) -> tuple[float, str] | None:
+    persian = _find_persian_money(prompt)
+    if persian:
+        return persian
     patterns = [
         r"([$€£])\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(million|billion|m|bn)?",
         r"(\d+(?:\.\d+)?)\s*(million|billion)\s*(usd|dollars|eur|euros|gbp|pounds)?",
@@ -128,7 +162,7 @@ def _find_area(prompt: str) -> tuple[float, str] | None:
         r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(square meters|square metres|sqm|sq\.?\s*m|m²|m2|square feet|sq\.?\s*ft|ft²|ft2)",
         prompt,
         flags=re.IGNORECASE,
-    )
+    ) or re.search(_FA_NUM + r"\s*(متر\s*مربع|مترمربع)", prompt)
     if not match:
         return None
     value = _number(match.group(1))
@@ -149,6 +183,8 @@ def extract_requirements(prompt: str, structured: dict | None = None, today: dat
     structured = structured or {}
     today = today or date.today()
     extraction = Extraction(project_type="custom", project_type_origin="inferred", original_prompt=prompt)
+    # Persian/Arabic digits and separators become ASCII so the patterns below can read numbers.
+    prompt = normalize_digits(prompt).replace("ي", "ی").replace("ك", "ک")
 
     project_type, origin, type_confidence = _classify(prompt, structured.get("category"))
     extraction.project_type = project_type
@@ -164,6 +200,8 @@ def extract_requirements(prompt: str, structured: dict | None = None, today: dat
             prompt,
             r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*[- ]?(?:story|stories|storey|storeys|floors?)",
         )
+        if floors is None:
+            floors = _find_count(prompt, r"(\d+)\s*طبقه(?!\s*(?:ی\s*)?(?:زیرزمین|منفی|پارکینگ))")
         if floors is not None:
             extraction.known.append(FieldRecord("floors", floors, "user", 0.95, "Read from the prompt."))
     else:
@@ -175,6 +213,8 @@ def extract_requirements(prompt: str, structured: dict | None = None, today: dat
             prompt,
             r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+basement",
         )
+        if basements is None:
+            basements = _find_count(prompt, r"(\d+)\s*طبقه\s*(?:ی\s*)?(?:زیرزمین|منفی|پارکینگ)")
         if basements is not None:
             extraction.known.append(FieldRecord("basements", basements, "user", 0.95, "Read from the prompt."))
     else:
@@ -218,11 +258,22 @@ def extract_requirements(prompt: str, structured: dict | None = None, today: dat
         if currency:
             extraction.known.append(FieldRecord("currency", currency, "user", 1.0, "Structured input."))
 
+    if structured.get("usd_exchange_rate"):
+        extraction.known.append(
+            FieldRecord("usd_exchange_rate", float(structured["usd_exchange_rate"]), "user", 1.0, "Structured input.")
+        )
+
     months = structured.get("duration_months")
     if months is None:
-        match = re.search(r"(\d+(?:\.\d+)?)\s*[- ]?months?", prompt, flags=re.IGNORECASE)
+        match = re.search(r"(\d+(?:\.\d+)?)\s*[- ]?months?", prompt, flags=re.IGNORECASE) or re.search(
+            r"(\d+(?:\.\d+)?)\s*ماه", prompt
+        )
+        years = None if match else re.search(r"(\d{1,2}(?:\.\d+)?)\s*سال", prompt)
         if match:
             months = float(match.group(1))
+        elif years:
+            months = float(years.group(1)) * 12
+        if months is not None:
             extraction.known.append(FieldRecord("duration_months", months, "user", 0.9, "Read from the prompt."))
     else:
         extraction.known.append(FieldRecord("duration_months", float(months), "user", 1.0, "Structured input."))
@@ -266,9 +317,11 @@ def extract_requirements(prompt: str, structured: dict | None = None, today: dat
 
     team = structured.get("team_size")
     if team is None:
-        match = re.search(r"team of\s+(\d+)|(\d+)\s+(?:people|person|staff)", prompt, flags=re.IGNORECASE)
+        match = re.search(
+            r"team of\s+(\d+)|(\d+)\s+(?:people|person|staff)|(\d+)\s*نفر", prompt, flags=re.IGNORECASE
+        )
         if match:
-            team = int(match.group(1) or match.group(2))
+            team = int(match.group(1) or match.group(2) or match.group(3))
             extraction.known.append(FieldRecord("team_size", team, "user", 0.85, "Read from the prompt."))
         else:
             extraction.missing.append("team_size")
@@ -308,6 +361,8 @@ def extract_requirements(prompt: str, structured: dict | None = None, today: dat
         extraction.assumptions.append(
             FieldRecord("aspect_ratio", 1.5, "assumption", 0.3, "Plan aspect ratio length/width used only for the conceptual massing.")
         )
+    if currency and not any(record.key == "currency" for record in extraction.known):
+        extraction.known.append(FieldRecord("currency", currency, "user", 1.0, "Structured input."))
     if currency is None:
         currency = "USD"
         extraction.assumptions.append(
